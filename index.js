@@ -7,7 +7,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // 目标 URL
-const TELEGRAPH_URL = 'https://generativelanguage.googleapis.com/v1beta';
+const TELEGRAPH_URL = 'https://generativelanguage.googleapis.com';
 
 // 中间件
 app.use(cors());
