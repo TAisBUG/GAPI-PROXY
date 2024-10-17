@@ -20,33 +20,20 @@ app.get('/health', (req, res) => {
 
 // 处理路径，检查和处理 v1beta
 function processPath(originalPath) {
-  // 移除开头的斜杠（如果存在）
   const path = originalPath.startsWith('/') ? originalPath.slice(1) : originalPath;
-  
-  // 检查路径是否已经包含 v1beta
   if (path.startsWith('v1beta/') || path === 'v1beta') {
     return `/${path}`;
   }
-  
-  // 如果不包含 v1beta，添加它
   return `/v1beta/${path}`;
 }
 
 // 处理 SSE 数据流
 async function handleSSEResponse(response, res) {
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop(); // 保留最后一个不完整的行
-
+    // 直接使用 response.body 作为流
+    response.body.on('data', chunk => {
+      const lines = chunk.toString().split('\n');
+      
       for (const line of lines) {
         if (line.startsWith('data: ')) {
           const data = line.slice(6); // 移除 'data: ' 前缀
@@ -55,37 +42,41 @@ async function handleSSEResponse(response, res) {
             continue;
           }
           try {
-            // 解析并重新格式化数据
+            // 尝试解析 JSON，如果成功则格式化后发送
             const parsedData = JSON.parse(data);
             res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
           } catch (e) {
-            console.error('Parse error:', e);
             // 如果解析失败，发送原始数据
             res.write(`data: ${data}\n\n`);
           }
         }
       }
-    }
+    });
 
-    // 处理剩余的buffer
-    if (buffer) {
-      if (buffer.startsWith('data: ')) {
-        const data = buffer.slice(6);
-        if (data !== '[DONE]') {
-          try {
-            const parsedData = JSON.parse(data);
-            res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
-          } catch (e) {
-            res.write(`data: ${data}\n\n`);
-          }
-        }
-      }
-    }
+    // 处理流结束
+    response.body.on('end', () => {
+      res.end();
+    });
+
+    // 处理流错误
+    response.body.on('error', error => {
+      console.error('Stream error:', error);
+      res.end();
+    });
+
   } catch (error) {
     console.error('Stream processing error:', error);
-  } finally {
     res.end();
   }
+
+  // 客户端断开连接时清理
+  req.on('close', () => {
+    try {
+      response.body.destroy();
+    } catch (e) {
+      console.error('Error destroying stream:', e);
+    }
+  });
 }
 
 // 主要代理处理
@@ -135,6 +126,13 @@ app.all('*', async (req, res) => {
 
       // 发送请求并处理流响应
       const response = await fetch(targetURL.toString(), fetchOptions);
+      
+      // 检查响应状态
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`HTTP error! status: ${response.status}, message: ${error}`);
+      }
+      
       await handleSSEResponse(response, res);
     } else {
       // 非 SSE 请求的处理逻辑
