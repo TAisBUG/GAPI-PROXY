@@ -51,16 +51,41 @@ app.all('*', async (req, res) => {
       fetchOptions.body = JSON.stringify(req.body);
     }
 
-    // 发送请求
-    const response = await fetch(targetURL.toString(), fetchOptions);
-    const data = await response.json();
+    // 检查是否是 SSE 请求
+    const isSSE = req.query.alt === 'sse';
 
-    // 发送响应
-    res.status(response.status).json(data);
+    if (isSSE) {
+      // 设置 SSE 响应头
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+
+      // 发送请求并处理流响应
+      const response = await fetch(targetURL.toString(), fetchOptions);
+      
+      // 将响应流直接传递给客户端
+      response.body.pipe(res);
+
+      // 错误处理
+      response.body.on('error', (error) => {
+        console.error('Stream error:', error);
+        res.end();
+      });
+
+      // 清理
+      req.on('close', () => {
+        response.body.destroy();
+      });
+    } else {
+      // 非 SSE 请求的原有处理逻辑
+      const response = await fetch(targetURL.toString(), fetchOptions);
+      const data = await response.json();
+      res.status(response.status).json(data);
+    }
 
   } catch (error) {
     console.error('Proxy error:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
+    res.status(500).json({ error: 'Internal Server Error', details: error.message });
   }
 });
 
