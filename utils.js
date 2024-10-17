@@ -1,4 +1,3 @@
-// utils.js
 import { Readable } from 'stream';
 
 export function processPath(originalPath) {
@@ -14,45 +13,28 @@ export async function handleSSEResponse(response, res, req) {
     throw new Error('Response body is undefined');
   }
 
-  let buffer = '';
   const stream = Readable.from(response.body);
 
   stream.on('data', (chunk) => {
-    buffer += chunk.toString();
-
-    const regex = /(?:data: .*(?:\n\n|$))/g;
-    let match;
-    while ((match = regex.exec(buffer)) !== null) {
-      const dataLine = match[0].trim();
-      if (dataLine.startsWith('data: ')) {
-        const data = dataLine.slice(6);
+    const lines = chunk.toString().split('\n');
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
         if (data === '[DONE]') {
           res.write('data: [DONE]\n\n');
-        } else {
-          try {
-            const parsedData = JSON.parse(data);
-            res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
-          } catch (error) {
-            res.write(`data: ${data}\n\n`);
-          }
+          continue;
+        }
+        try {
+          const parsedData = JSON.parse(data);
+          res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
+        } catch (e) {
+          res.write(`data: ${data}\n\n`);
         }
       }
-      buffer = buffer.slice(match.index + match[0].length);
-      regex.lastIndex = 0;
     }
-    buffer = buffer.substring(buffer.lastIndexOf('\n\n') + 2) || ""; // Update buffer if no match
   });
 
   stream.on('end', () => {
-    if (buffer.startsWith('data: ')) {
-      const data = buffer.slice(6);
-      try {
-        const parsedData = JSON.parse(data);
-        res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
-      } catch (error) {
-        res.write(`data: ${data}\n\n`);
-      }
-    }
     res.end();
   });
 
