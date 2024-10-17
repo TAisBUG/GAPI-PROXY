@@ -15,48 +15,41 @@ export async function handleSSEResponse(response, res, req) {
   }
 
   let buffer = '';
-
   const stream = Readable.from(response.body);
 
   stream.on('data', (chunk) => {
-    const chunkString = chunk.toString();
-    buffer += chunkString;
+    buffer += chunk.toString();
 
-    const lines = buffer.split('\n');
-    buffer = '';
-
-    for (let i = 0; i < lines.length - 1; i++) {
-      const line = lines[i];
-      if (line.startsWith('data: ')) {
-        const data = line.slice(6);
+    const regex = /(?:data: .*(?:\n\n|$))/g;
+    let match;
+    while ((match = regex.exec(buffer)) !== null) {
+      const dataLine = match[0].trim();
+      if (dataLine.startsWith('data: ')) {
+        const data = dataLine.slice(6);
         if (data === '[DONE]') {
           res.write('data: [DONE]\n\n');
-          continue;
-        }
-        try {
-          const parsedData = JSON.parse(data);
-          res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
-        } catch (e) {
-          res.write(`data: ${data}\n\n`);
+        } else {
+          try {
+            const parsedData = JSON.parse(data);
+            res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
+          } catch (error) {
+            res.write(`data: ${data}\n\n`);
+          }
         }
       }
-    }
-
-    if (lines.length > 0) {
-      buffer = lines[lines.length - 1];
+      buffer = buffer.slice(match.index + match[0].length);
+      regex.lastIndex = 0;
     }
   });
 
   stream.on('end', () => {
-    if (buffer) {
-      if (buffer.startsWith('data: ')) {
-        const data = buffer.slice(6);
-        try {
-          const parsedData = JSON.parse(data);
-          res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
-        } catch (e) {
-          res.write(`data: ${data}\n\n`);
-        }
+    if (buffer.startsWith('data: ')) {
+      const data = buffer.slice(6);
+      try {
+        const parsedData = JSON.parse(data);
+        res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
+      } catch (error) {
+        res.write(`data: ${data}\n\n`);
       }
     }
     res.end();
