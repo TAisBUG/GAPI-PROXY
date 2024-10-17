@@ -1,3 +1,4 @@
+// utils.js
 import { Readable } from 'stream';
 
 export function processPath(originalPath) {
@@ -13,11 +14,19 @@ export async function handleSSEResponse(response, res, req) {
     throw new Error('Response body is undefined');
   }
 
+  let buffer = '';
+
   const stream = Readable.from(response.body);
 
   stream.on('data', (chunk) => {
-    const lines = chunk.toString().split('\n');
-    for (const line of lines) {
+    const chunkString = chunk.toString();
+    buffer += chunkString;
+
+    const lines = buffer.split('\n');
+    buffer = '';
+
+    for (let i = 0; i < lines.length - 1; i++) {
+      const line = lines[i];
       if (line.startsWith('data: ')) {
         const data = line.slice(6);
         if (data === '[DONE]') {
@@ -32,9 +41,24 @@ export async function handleSSEResponse(response, res, req) {
         }
       }
     }
+
+    if (lines.length > 0) {
+      buffer = lines[lines.length - 1];
+    }
   });
 
   stream.on('end', () => {
+    if (buffer) {
+      if (buffer.startsWith('data: ')) {
+        const data = buffer.slice(6);
+        try {
+          const parsedData = JSON.parse(data);
+          res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
+        } catch (e) {
+          res.write(`data: ${data}\n\n`);
+        }
+      }
+    }
     res.end();
   });
 
