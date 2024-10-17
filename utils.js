@@ -40,6 +40,7 @@ export async function handleSSEResponse(response, res, req) {
       buffer = buffer.slice(match.index + match[0].length);
       regex.lastIndex = 0;
     }
+    buffer = buffer.substring(buffer.lastIndexOf('\n\n') + 2) || ""; // Update buffer if no match
   });
 
   stream.on('end', () => {
