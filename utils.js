@@ -27,7 +27,7 @@ export async function handleSSEResponse(response, res, req) {
         currentChunk += data;
 
         if (data === '[DONE]') {
-          if (currentChunk.length > 5 && previousChunk.endsWith(currentChunk.slice(0, -6))) {
+          if (currentChunk.length > 2 && previousChunk.endsWith(currentChunk.slice(0, -6))) {
             res.write('data: [DONE]\n\n');
             return;
           } else if (currentChunk !== '[DONE]') {
