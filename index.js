@@ -48,21 +48,20 @@ app.all('*', async (req, res) => {
 
     const isSSE = req.query.alt === 'sse';
 
+    const response = await fetch(targetURL.toString(), fetchOptions);
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`HTTP error! status: ${response.status}, message: ${error}`);
+    }
+
     if (isSSE) {
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
-
-      const response = await fetch(targetURL.toString(), fetchOptions);
-      
-      if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`HTTP error! status: ${response.status}, message: ${error}`);
-      }
       
       await handleSSEResponse(response, res, req);
     } else {
-      const response = await fetch(targetURL.toString(), fetchOptions);
       const data = await response.json();
       res.status(response.status).json(data);
     }
