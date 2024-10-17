@@ -1,3 +1,4 @@
+// index.js
 import express from 'express';
 import fetch from 'node-fetch';
 import cors from 'cors';
@@ -71,6 +72,7 @@ app.all('*', async (req, res) => {
     res.status(500).json({ error: 'Internal Server Error', details: error.message });
   }
 });
+
 
 app.listen(port, () => {
   console.log(`Proxy server running on port ${port}`);
