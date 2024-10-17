@@ -1,3 +1,4 @@
+// utils.js
 import { Readable } from 'stream';
 
 export function processPath(originalPath) {
@@ -14,12 +15,18 @@ export async function handleSSEResponse(response, res, req) {
   }
 
   const stream = Readable.from(response.body);
+  const sentDataChunks = new Set();
 
   stream.on('data', (chunk) => {
     const lines = chunk.toString().split('\n');
     for (const line of lines) {
       if (line.startsWith('data: ')) {
         const data = line.slice(6);
+        if (sentDataChunks.has(data)) {
+          continue;
+        }
+        sentDataChunks.add(data);
+
         if (data === '[DONE]') {
           res.write('data: [DONE]\n\n');
           continue;
