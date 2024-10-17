@@ -1,3 +1,5 @@
+import { Readable } from 'stream';
+
 export function processPath(originalPath) {
   const path = originalPath.startsWith('/') ? originalPath.slice(1) : originalPath;
   if (path.startsWith('v1beta/') || path === 'v1beta') {
@@ -7,44 +9,42 @@ export function processPath(originalPath) {
 }
 
 export async function handleSSEResponse(response, res, req) {
-  const reader = response.body.getReader();
-  const encoder = new TextEncoder();
+  if (!response.body) {
+    throw new Error('Response body is undefined');
+  }
 
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        res.write('data: [DONE]\n\n');
-        break;
-      }
-      
-      const chunk = new TextDecoder().decode(value);
-      const lines = chunk.split('\n');
-      
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          if (data === '[DONE]') {
-            res.write('data: [DONE]\n\n');
-            continue;
-          }
-          try {
-            const parsedData = JSON.parse(data);
-            res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
-          } catch (e) {
-            res.write(`data: ${data}\n\n`);
-          }
+  const stream = Readable.from(response.body);
+
+  stream.on('data', (chunk) => {
+    const lines = chunk.toString().split('\n');
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') {
+          res.write('data: [DONE]\n\n');
+          continue;
+        }
+        try {
+          const parsedData = JSON.parse(data);
+          res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
+        } catch (e) {
+          res.write(`data: ${data}\n\n`);
         }
       }
     }
-  } catch (error) {
-    console.error('Stream processing error:', error);
-  } finally {
+  });
+
+  stream.on('end', () => {
     res.end();
-  }
+  });
+
+  stream.on('error', (error) => {
+    console.error('Stream processing error:', error);
+    res.end();
+  });
 
   req.on('close', () => {
-    reader.cancel();
+    stream.destroy();
   });
 }
 
