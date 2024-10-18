@@ -9,54 +9,101 @@ export function processPath(originalPath) {
   return `/v1beta/${path}`;
 }
 
+export function getApiKeys(req) {
+  const keyParam = req.query.key || '';
+  if (!keyParam) return [];
+  return keyParam.split(';').filter(Boolean);
+}
+
 export async function handleSSEResponse(response, res, req) {
   if (!response.body) {
     throw new Error('Response body is undefined');
   }
 
   const stream = Readable.from(response.body);
-  let previousChunk = '';
+  let buffer = '';
+  let lastChunk = null;
 
-  stream.on('data', (chunk) => {
-    const lines = chunk.toString().split('\n');
-    let currentChunk = '';
+  const processChunk = (chunk) => {
+    try {
+      return JSON.parse(chunk);
+    } catch (e) {
+      return chunk;
+    }
+  };
 
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const data = line.slice(6);
-        currentChunk += data;
+  const writeData = (data) => {
+    if (typeof data === 'object') {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    } else {
+      res.write(`data: ${data}\n\n`);
+    }
+  };
 
-        if (data === '[DONE]') {
-          if (currentChunk.length > 2 && previousChunk.endsWith(currentChunk.slice(0, -6))) {
-            res.write('data: [DONE]\n\n');
-            return;
-          } else if (currentChunk !== '[DONE]') {
-            try {
-              const parsedData = JSON.parse(currentChunk);
-              res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
-            } catch (e) {
-              res.write(`data: ${currentChunk}\n\n`);
-            }
-          }
+  const handleLine = (line) => {
+    if (!line.startsWith('data: ')) return false;
+    
+    const data = line.slice(6);
+    if (!data) return false;
+
+    if (data === '[DONE]') {
+      if (lastChunk) {
+        const currentContent = buffer;
+        const hasNewlineInPrevious = lastChunk.endsWith('\n');
+        const hasNewlineInCurrent = currentContent.startsWith('\n');
+
+        // 检查是否存在换行符并且内容重复
+        if ((hasNewlineInPrevious || hasNewlineInCurrent) && 
+            currentContent.length > 2 && 
+            lastChunk.endsWith(currentContent.slice(0, -6))) {
           res.write('data: [DONE]\n\n');
-          return;
+          return true;
+        }
+
+        // 如果内容不重复，发送最后的数据
+        const processedData = processChunk(currentContent);
+        if (processedData && processedData !== '[DONE]') {
+          writeData(processedData);
         }
       }
+      res.write('data: [DONE]\n\n');
+      return true;
     }
 
-    if (previousChunk) {
-      try {
-        const parsedData = JSON.parse(previousChunk);
-        res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
-      } catch (e) {
-        res.write(`data: ${previousChunk}\n\n`);
+    if (lastChunk) {
+      const processedData = processChunk(lastChunk);
+      if (processedData) {
+        writeData(processedData);
       }
     }
 
-    previousChunk = currentChunk;
+    lastChunk = data;
+    return false;
+  };
+
+  stream.on('data', (chunk) => {
+    const text = chunk.toString();
+    buffer += text;
+    
+    // 按行分割处理数据
+    const lines = buffer.split('\n');
+    // 保留最后一个可能不完整的行
+    buffer = lines.pop() || '';
+
+    // 处理完整的行
+    for (const line of lines) {
+      if (handleLine(line.trim())) {
+        return;
+      }
+    }
   });
 
   stream.on('end', () => {
+    // 处理缓冲区中剩余的数据
+    if (buffer) {
+      const line = buffer.trim();
+      handleLine(line);
+    }
     res.end();
   });
 
@@ -65,13 +112,8 @@ export async function handleSSEResponse(response, res, req) {
     res.end();
   });
 
+  // 当请求被客户端终止时清理流
   req.on('close', () => {
     stream.destroy();
   });
-}
-
-export function getApiKeys(req) {
-  const keyParam = req.query.key || '';
-  if (!keyParam) return [];
-  return keyParam.split(';').filter(Boolean);
 }
