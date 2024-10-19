@@ -1,98 +1,77 @@
-import { Readable } from 'stream';
+import express from 'express';
+import fetch from 'node-fetch';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import { processPath, handleSSEResponse, getApiKeys } from './utils.js';
 
-export function processPath(originalPath) {
-  const path = originalPath.startsWith('/') ? originalPath.slice(1) : originalPath;
-  if (path.startsWith('v1beta/') || path === 'v1beta') {
-    return `/${path}`;
-  }
-  return `/v1beta/${path}`;
-}
+dotenv.config();
 
-export async function handleSSEResponse(response, res, req) {
-  if (!response.body) {
-    throw new Error('Response body is undefined');
-  }
+const app = express();
+const port = process.env.PORT || 3000;
 
-  const stream = Readable.from(response.body);
-  let lastContent = '';  // 存储上一次的完整内容
+const TELEGRAPH_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
-  stream.on('data', (chunk) => {
-    const lines = chunk.toString().split('\n');
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const data = line.slice(6);
-        if (data === '[DONE]') {
-          res.write('data: [DONE]\n\n');
-          continue;
-        }
+app.use(cors());
+app.use(express.json());
 
-        try {
-          const currentData = JSON.parse(data);
-          const currentContent = getCurrentContent(currentData);
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'OK' });
+});
 
-          // 如果是空内容，跳过
-          if (!currentContent) {
-            continue;
-          }
+app.all('*', async (req, res) => {
+  try {
+    const processedPath = processPath(req.path);
+    const targetURL = new URL(TELEGRAPH_URL.replace(/\/v1beta$/, '') + processedPath);
+    
+    const apiKeys = getApiKeys(req);
+    if (apiKeys.length > 0) {
+      const selectedKey = apiKeys[Math.floor(Math.random() * apiKeys.length)];
+      targetURL.searchParams.set('key', selectedKey);
+    }
 
-          // 检查当前内容是否是上一次内容末尾的重复
-          if (lastContent && isEndingDuplicate(lastContent, currentContent)) {
-            console.log('Detected and skipped duplicate ending:', currentContent);
-            continue;
-          }
-
-          // 不是末尾重复，更新lastContent并发送数据
-          lastContent = currentContent;
-          res.write(`data: ${JSON.stringify(currentData)}\n\n`);
-
-        } catch (e) {
-          console.error('Error processing chunk:', e);
-          res.write(`data: ${data}\n\n`);
-        }
+    for (const [key, value] of Object.entries(req.query)) {
+      if (key !== 'key') {
+        targetURL.searchParams.set(key, value);
       }
     }
-  });
 
-  stream.on('end', () => {
-    res.end();
-  });
+    const fetchOptions = {
+      method: req.method,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    };
 
-  stream.on('error', (error) => {
-    console.error('Stream processing error:', error);
-    res.end();
-  });
+    if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+      fetchOptions.body = JSON.stringify(req.body);
+    }
 
-  req.on('close', () => {
-    stream.destroy();
-  });
-}
+    const isSSE = req.query.alt === 'sse';
 
-// 从响应数据中提取实际内容
-function getCurrentContent(data) {
-  try {
-    return data.candidates[0].content.parts[0].text;
-  } catch (e) {
-    return null;
+    const response = await fetch(targetURL.toString(), fetchOptions);
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`HTTP error! status: ${response.status}, message: ${error}`);
+    }
+
+    if (isSSE) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      
+      await handleSSEResponse(response, res, req);
+    } else {
+      const data = await response.json();
+      res.status(response.status).json(data);
+    }
+
+  } catch (error) {
+    console.error('Proxy error:', error);
+    res.status(500).json({ error: 'Internal Server Error', details: error.message });
   }
-}
+});
 
-// 检查是否是末尾重复内容
-function isEndingDuplicate(lastContent, currentContent) {
-  // 如果当前内容长度大于上次内容，显然不是重复
-  if (currentContent.length > lastContent.length) {
-    return false;
-  }
-
-  // 检查当前内容是否出现在上次内容的末尾
-  const endPosition = lastContent.length - currentContent.length;
-  const endingPart = lastContent.substring(endPosition);
-  
-  // 只有当前内容完全匹配上次内容的末尾部分时，才认为是重复
-  return endingPart === currentContent;
-}
-
-export function getApiKeys(req) {
-  const keyParam = req.query.key || '';
-  if (!keyParam) return [];
-  return keyParam.split(';').filter(Boolean);
-}
+app.listen(port, () => {
+  console.log(`Proxy server running on port ${port}`);
+});
