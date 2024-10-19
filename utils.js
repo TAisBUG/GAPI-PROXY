@@ -1,4 +1,3 @@
-// utils.js
 import { Readable } from 'stream';
 
 export function processPath(originalPath) {
@@ -9,91 +8,49 @@ export function processPath(originalPath) {
   return `/v1beta/${path}`;
 }
 
-export function getApiKeys(req) {
-  const keyParam = req.query.key || '';
-  if (!keyParam) return [];
-  return keyParam.split(';').filter(Boolean);
-}
-
 export async function handleSSEResponse(response, res, req) {
   if (!response.body) {
     throw new Error('Response body is undefined');
   }
 
   const stream = Readable.from(response.body);
-  let buffer = '';
-  let lastChunk = null;
-
-  const processChunk = (chunk) => {
-    try {
-      return JSON.parse(chunk);
-    } catch (e) {
-      return chunk;
-    }
-  };
-
-  const writeData = (data) => {
-    if (typeof data === 'object') {
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
-    } else {
-      res.write(`data: ${data}\n\n`);
-    }
-  };
-
-  const handleLine = (line) => {
-    if (!line.startsWith('data: ')) return false;
-    
-    const data = line.slice(6);
-    if (!data) return false;
-
-    if (data === '[DONE]') {
-      if (lastChunk) {
-        const currentContent = buffer;
-        const hasNewlineInPrevious = lastChunk.endsWith('\n');
-        const hasNewlineInCurrent = currentContent.startsWith('\n');
-
-        // 检查是否存在换行符并且内容重复
-        if ((hasNewlineInPrevious || hasNewlineInCurrent) && 
-            currentContent.length > 5 && 
-            lastChunk.endsWith(currentContent.slice(0, -6))) {
-          res.write('data: [DONE]\n\n');
-          return true;
-        }
-
-        // 如果内容不重复，发送最后的数据
-        const processedData = processChunk(currentContent);
-        if (processedData && processedData !== '[DONE]') {
-          writeData(processedData);
-        }
-      }
-      res.write('data: [DONE]\n\n');
-      return true;
-    }
-
-    if (lastChunk) {
-      const processedData = processChunk(lastChunk);
-      if (processedData) {
-        writeData(processedData);
-      }
-    }
-
-    lastChunk = data;
-    return false;
-  };
+  let lastContent = null; // 用于存储上一次的内容
+  let buffer = ''; // 用于处理跨块的数据
 
   stream.on('data', (chunk) => {
-    const text = chunk.toString();
-    buffer += text;
-    
-    // 按行分割处理数据
+    buffer += chunk.toString();
     const lines = buffer.split('\n');
-    // 保留最后一个可能不完整的行
+    
+    // 保留最后一行，因为它可能是不完整的
     buffer = lines.pop() || '';
 
-    // 处理完整的行
     for (const line of lines) {
-      if (handleLine(line.trim())) {
-        return;
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') {
+          res.write('data: [DONE]\n\n');
+          continue;
+        }
+
+        try {
+          const parsedData = JSON.parse(data);
+          // 从响应中提取实际内容
+          const content = extractContent(parsedData);
+          
+          // 检查是否是重复内容
+          if (lastContent && isRepeatContent(content, lastContent)) {
+            continue; // 跳过重复内容
+          }
+
+          // 更新最后发送的内容
+          lastContent = content;
+          
+          // 发送数据
+          res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
+        } catch (e) {
+          // 如果解析失败，仍然发送原始数据
+          res.write(`data: ${data}\n\n`);
+        }
       }
     }
   });
@@ -101,8 +58,20 @@ export async function handleSSEResponse(response, res, req) {
   stream.on('end', () => {
     // 处理缓冲区中剩余的数据
     if (buffer) {
-      const line = buffer.trim();
-      handleLine(line);
+      if (buffer.startsWith('data: ')) {
+        const data = buffer.slice(6);
+        if (data !== '[DONE]') {
+          try {
+            const parsedData = JSON.parse(data);
+            const content = extractContent(parsedData);
+            if (!lastContent || !isRepeatContent(content, lastContent)) {
+              res.write(`data: ${JSON.stringify(parsedData)}\n\n`);
+            }
+          } catch (e) {
+            res.write(`data: ${data}\n\n`);
+          }
+        }
+      }
     }
     res.end();
   });
@@ -112,8 +81,28 @@ export async function handleSSEResponse(response, res, req) {
     res.end();
   });
 
-  // 当请求被客户端终止时清理流
   req.on('close', () => {
     stream.destroy();
   });
+}
+
+// 从响应数据中提取实际内容
+function extractContent(parsedData) {
+  try {
+    return parsedData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  } catch (e) {
+    return JSON.stringify(parsedData);
+  }
+}
+
+// 检查是否是重复内容
+function isRepeatContent(currentContent, lastContent) {
+  if (!currentContent || !lastContent) return false;
+  return lastContent.endsWith(currentContent);
+}
+
+export function getApiKeys(req) {
+  const keyParam = req.query.key || '';
+  if (!keyParam) return [];
+  return keyParam.split(';').filter(Boolean);
 }
