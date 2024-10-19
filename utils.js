@@ -54,7 +54,7 @@ export async function handleSSEResponse(response, res, req) {
 
         // 检查是否存在换行符并且内容重复
         if ((hasNewlineInPrevious || hasNewlineInCurrent) && 
-            currentContent.length < 1 && 
+            currentContent.length >= 3 && 
             lastChunk.endsWith(currentContent.slice(0, -6))) {
           res.write('data: [DONE]\n\n');
           return true;
